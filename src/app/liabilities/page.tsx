@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import { useLiveQuery } from '@/hooks/useLiveQuery'
+import { useMasked } from '@/hooks/useMasked'
 import { db } from '@/lib/db'
-import { formatCurrency, formatPercent } from '@/lib/utils'
+import { formatPercent } from '@/lib/utils'
 import type { Loan, Property } from '@/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -15,6 +16,8 @@ import { Dialog } from '@/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Plus, Trash2, Edit2, Landmark, Home } from 'lucide-react'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { useConfirm } from '@/hooks/useConfirm'
 
 const emptyLoan: Omit<Loan, 'id'> = {
   name: '', type: 'home', principal: 0, balance: 0, interestRate: 0, emi: 0, startDate: '', endDate: '',
@@ -34,6 +37,8 @@ export default function LiabilitiesPage() {
   const [editingProperty, setEditingProperty] = useState<Property | null>(null)
   const [loanForm, setLoanForm] = useState(emptyLoan)
   const [propertyForm, setPropertyForm] = useState(emptyProperty)
+  const { confirm, confirmProps } = useConfirm()
+  const { fmt: formatCurrency } = useMasked()
 
   const lns = loans ?? []
   const props = properties ?? []
@@ -53,7 +58,10 @@ export default function LiabilitiesPage() {
     else await db.loans.add({ ...loanForm })
     setShowLoanForm(false)
   }
-  async function deleteLoan(id: number) { await db.loans.delete(id) }
+  async function deleteLoan(id: number) {
+    const ok = await confirm({ title: 'Delete loan?', description: 'This loan entry will be permanently removed.', variant: 'destructive', confirmLabel: 'Delete' })
+    if (ok) await db.loans.delete(id)
+  }
 
   // Property CRUD
   function openAddProperty() { setPropertyForm(emptyProperty); setEditingProperty(null); setShowPropertyForm(true) }
@@ -67,32 +75,35 @@ export default function LiabilitiesPage() {
     else await db.properties.add({ ...propertyForm })
     setShowPropertyForm(false)
   }
-  async function deleteProperty(id: number) { await db.properties.delete(id) }
+  async function deleteProperty(id: number) {
+    const ok = await confirm({ title: 'Delete property?', description: 'This property entry will be permanently removed.', variant: 'destructive', confirmLabel: 'Delete' })
+    if (ok) await db.properties.delete(id)
+  }
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Liabilities</h1>
-        <p className="text-neutral-500 text-sm mt-1">Track your loans and properties</p>
+        <p className="text-neutral-500 dark:text-neutral-400 text-sm mt-1">Track your loans and properties</p>
       </div>
 
       {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
           <CardContent className="p-5">
-            <p className="text-sm text-neutral-500 mb-1">Total Outstanding</p>
+            <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-1">Total Outstanding</p>
             <p className="text-xl font-bold text-red-600">{formatCurrency(totalBalance, true)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-5">
-            <p className="text-sm text-neutral-500 mb-1">Monthly EMI</p>
+            <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-1">Monthly EMI</p>
             <p className="text-xl font-bold">{formatCurrency(totalEMI)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-5">
-            <p className="text-sm text-neutral-500 mb-1">Property Value</p>
+            <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-1">Property Value</p>
             <p className="text-xl font-bold text-emerald-600">{formatCurrency(totalPropertyValue, true)}</p>
           </CardContent>
         </Card>
@@ -109,21 +120,21 @@ export default function LiabilitiesPage() {
             <Button onClick={openAddLoan} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Loan</Button>
           </div>
           {lns.length === 0 ? (
-            <EmptyState icon={<Landmark className="h-6 w-6 text-neutral-400" />} title="No loans tracked" description="Add your loans to track outstanding balances and EMIs." actionLabel="Add Loan" onAction={openAddLoan} />
+            <EmptyState icon={<Landmark className="h-6 w-6 text-neutral-400 dark:text-neutral-500" />} title="No loans tracked" description="Add your loans to track outstanding balances and EMIs." actionLabel="Add Loan" onAction={openAddLoan} />
           ) : (
             <Card>
               <CardContent className="p-0">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b border-neutral-100">
-                        <th className="text-left p-4 font-medium text-neutral-500">Loan</th>
-                        <th className="text-left p-4 font-medium text-neutral-500">Type</th>
-                        <th className="text-right p-4 font-medium text-neutral-500">Principal</th>
-                        <th className="text-right p-4 font-medium text-neutral-500">Balance</th>
-                        <th className="text-right p-4 font-medium text-neutral-500">Rate</th>
-                        <th className="text-right p-4 font-medium text-neutral-500">EMI</th>
-                        <th className="text-right p-4 font-medium text-neutral-500">Repaid</th>
+                      <tr className="border-b border-neutral-100 dark:border-neutral-800">
+                        <th className="text-left p-4 font-medium text-neutral-500 dark:text-neutral-400">Loan</th>
+                        <th className="text-left p-4 font-medium text-neutral-500 dark:text-neutral-400">Type</th>
+                        <th className="text-right p-4 font-medium text-neutral-500 dark:text-neutral-400">Principal</th>
+                        <th className="text-right p-4 font-medium text-neutral-500 dark:text-neutral-400">Balance</th>
+                        <th className="text-right p-4 font-medium text-neutral-500 dark:text-neutral-400">Rate</th>
+                        <th className="text-right p-4 font-medium text-neutral-500 dark:text-neutral-400">EMI</th>
+                        <th className="text-right p-4 font-medium text-neutral-500 dark:text-neutral-400">Repaid</th>
                         <th className="p-4"></th>
                       </tr>
                     </thead>
@@ -131,7 +142,7 @@ export default function LiabilitiesPage() {
                       {lns.map(loan => {
                         const repaid = loan.principal > 0 ? (loan.principal - loan.balance) / loan.principal : 0
                         return (
-                          <tr key={loan.id} className="border-b border-neutral-50 hover:bg-neutral-50/50">
+                          <tr key={loan.id} className="border-b border-neutral-50 dark:border-neutral-800 hover:bg-neutral-50/50 dark:hover:bg-neutral-800/50">
                             <td className="p-4 font-medium">{loan.name}</td>
                             <td className="p-4"><Badge>{loan.type}</Badge></td>
                             <td className="p-4 text-right">{formatCurrency(loan.principal)}</td>
@@ -143,8 +154,8 @@ export default function LiabilitiesPage() {
                             </td>
                             <td className="p-4 text-right">
                               <div className="flex items-center justify-end gap-1">
-                                <button onClick={() => openEditLoan(loan)} className="p-1 rounded hover:bg-neutral-100"><Edit2 className="h-3.5 w-3.5 text-neutral-400" /></button>
-                                <button onClick={() => loan.id && deleteLoan(loan.id)} className="p-1 rounded hover:bg-red-50"><Trash2 className="h-3.5 w-3.5 text-red-400" /></button>
+                                <button onClick={() => openEditLoan(loan)} className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"><Edit2 className="h-3.5 w-3.5 text-neutral-400 dark:text-neutral-500" /></button>
+                                <button onClick={() => loan.id && deleteLoan(loan.id)} className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-950"><Trash2 className="h-3.5 w-3.5 text-red-400" /></button>
                               </div>
                             </td>
                           </tr>
@@ -163,7 +174,7 @@ export default function LiabilitiesPage() {
             <Button onClick={openAddProperty} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Property</Button>
           </div>
           {props.length === 0 ? (
-            <EmptyState icon={<Home className="h-6 w-6 text-neutral-400" />} title="No properties tracked" description="Add your properties to track real asset value." actionLabel="Add Property" onAction={openAddProperty} />
+            <EmptyState icon={<Home className="h-6 w-6 text-neutral-400 dark:text-neutral-500" />} title="No properties tracked" description="Add your properties to track real asset value." actionLabel="Add Property" onAction={openAddProperty} />
           ) : (
             <div className="grid gap-4">
               {props.map(prop => (
@@ -172,28 +183,28 @@ export default function LiabilitiesPage() {
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <h3 className="font-semibold">{prop.name}</h3>
-                        <p className="text-sm text-neutral-500">{prop.location}</p>
+                        <p className="text-sm text-neutral-500 dark:text-neutral-400">{prop.location}</p>
                       </div>
                       <div className="flex gap-1">
-                        <button onClick={() => openEditProperty(prop)} className="p-1.5 rounded hover:bg-neutral-100"><Edit2 className="h-4 w-4 text-neutral-400" /></button>
-                        <button onClick={() => prop.id && deleteProperty(prop.id)} className="p-1.5 rounded hover:bg-red-50"><Trash2 className="h-4 w-4 text-red-400" /></button>
+                        <button onClick={() => openEditProperty(prop)} className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"><Edit2 className="h-4 w-4 text-neutral-400 dark:text-neutral-500" /></button>
+                        <button onClick={() => prop.id && deleteProperty(prop.id)} className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-950"><Trash2 className="h-4 w-4 text-red-400" /></button>
                       </div>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                       <div>
-                        <p className="text-neutral-500">Total Cost</p>
+                        <p className="text-neutral-500 dark:text-neutral-400">Total Cost</p>
                         <p className="font-medium">{formatCurrency(prop.totalCost)}</p>
                       </div>
                       <div>
-                        <p className="text-neutral-500">Market Value</p>
+                        <p className="text-neutral-500 dark:text-neutral-400">Market Value</p>
                         <p className="font-medium text-emerald-600">{formatCurrency(prop.currentMarketValue)}</p>
                       </div>
                       <div>
-                        <p className="text-neutral-500">Loan Outstanding</p>
+                        <p className="text-neutral-500 dark:text-neutral-400">Loan Outstanding</p>
                         <p className="font-medium text-red-600">{formatCurrency(prop.outstandingPrincipal)}</p>
                       </div>
                       <div>
-                        <p className="text-neutral-500">Carpet Area</p>
+                        <p className="text-neutral-500 dark:text-neutral-400">Carpet Area</p>
                         <p className="font-medium">{prop.carpetSqft} sq ft</p>
                       </div>
                     </div>
@@ -257,6 +268,8 @@ export default function LiabilitiesPage() {
           </div>
         </div>
       </Dialog>
+
+      <ConfirmDialog {...confirmProps} />
     </div>
   )
 }

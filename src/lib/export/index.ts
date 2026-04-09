@@ -3,9 +3,11 @@ import * as XLSX from 'xlsx'
 
 export async function exportToJSON(): Promise<string> {
   const data = {
-    version: 1,
+    version: 3,
     exportDate: new Date().toISOString(),
+    goals: await db.goals.toArray(),
     investments: await db.investments.toArray(),
+    sips: await db.sips.toArray(),
     loans: await db.loans.toArray(),
     properties: await db.properties.toArray(),
     incomeEntries: await db.incomeEntries.toArray(),
@@ -24,7 +26,9 @@ export async function importFromJSON(jsonStr: string): Promise<void> {
     for (const table of db.tables) {
       await table.clear()
     }
+    if (data.goals) await db.goals.bulkAdd(data.goals.map(({ id, ...rest }: any) => rest))
     if (data.investments) await db.investments.bulkAdd(data.investments.map(({ id, ...rest }: any) => rest))
+    if (data.sips) await db.sips.bulkAdd(data.sips.map(({ id, ...rest }: any) => rest))
     if (data.loans) await db.loans.bulkAdd(data.loans.map(({ id, ...rest }: any) => rest))
     if (data.properties) await db.properties.bulkAdd(data.properties.map(({ id, ...rest }: any) => rest))
     if (data.incomeEntries) await db.incomeEntries.bulkAdd(data.incomeEntries.map(({ id, ...rest }: any) => rest))

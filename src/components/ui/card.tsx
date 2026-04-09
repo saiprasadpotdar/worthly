@@ -3,7 +3,7 @@ import { forwardRef } from "react"
 
 export const Card = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} className={cn("rounded-xl border border-neutral-200 bg-white shadow-sm", className)} {...props} />
+    <div ref={ref} className={cn("rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-sm", className)} {...props} />
   )
 )
 Card.displayName = "Card"
@@ -24,7 +24,7 @@ CardTitle.displayName = "CardTitle"
 
 export const CardDescription = forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLParagraphElement>>(
   ({ className, ...props }, ref) => (
-    <p ref={ref} className={cn("text-sm text-neutral-500", className)} {...props} />
+    <p ref={ref} className={cn("text-sm text-neutral-500 dark:text-neutral-400", className)} {...props} />
   )
 )
 CardDescription.displayName = "CardDescription"

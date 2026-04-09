@@ -1,7 +1,15 @@
+export interface Goal {
+  id?: number
+  name: string
+  targetCorpus?: number
+  targetYear?: number
+  color?: string
+}
+
 export interface Investment {
   id?: number
-  category: 'retirement' | 'emergency'
-  assetClass: 'equity' | 'debt' | 'fixed'
+  goal: string
+  assetClass: 'equity' | 'debt' | 'fixed' | 'real_estate'
   instrument: string
   investedValue: number
   currentValue: number
@@ -73,6 +81,7 @@ export interface UserProfile {
   desiredRealToNW: number
   desiredSavingsToIncome: number
   desiredLoanToAsset: number
+  passkey?: string // SHA-256 hash of user's passkey
 }
 
 export interface Milestone {
@@ -86,12 +95,26 @@ export interface Milestone {
 export interface NetWorthSnapshot {
   id?: number
   year: number
-  age: number
-  beginningAssets: number
-  growthReduction: number
-  yearEndAssets: number
-  liabilities: number
+  month: number // 1-12
+  date: string // YYYY-MM-DD
+  totalAssets: number
+  totalLiabilities: number
   netWorth: number
+  equity: number
+  debt: number
+  realAssets: number
+}
+
+export interface SIP {
+  id?: number
+  goal: string
+  instrument: string
+  amount: number
+  dayOfMonth: number // 1-28
+  assetClass: 'equity' | 'debt' | 'fixed' | 'real_estate'
+  platform?: string
+  startDate: string
+  active: boolean
 }
 
 export interface DashboardData {

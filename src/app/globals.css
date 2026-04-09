@@ -1,9 +1,16 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #fafafa;
   --foreground: #0a0a0a;
   --sidebar-width: 240px;
+}
+
+.dark {
+  --background: #0a0a0a;
+  --foreground: #fafafa;
 }
 
 body {

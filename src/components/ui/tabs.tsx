@@ -15,7 +15,7 @@ export function Tabs({ defaultValue, children, className }: { defaultValue: stri
 
 export function TabsList({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("inline-flex items-center gap-1 rounded-lg bg-neutral-100 p-1", className)}>
+    <div className={cn("inline-flex items-center gap-1 rounded-lg bg-neutral-100 dark:bg-neutral-800 p-1", className)}>
       {children}
     </div>
   )
@@ -28,7 +28,7 @@ export function TabsTrigger({ value, children, className }: { value: string; chi
       onClick={() => ctx.onChange(value)}
       className={cn(
         "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-        ctx.value === value ? "bg-white text-neutral-900 shadow-sm" : "text-neutral-500 hover:text-neutral-900",
+        ctx.value === value ? "bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-sm" : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white",
         className
       )}
     >

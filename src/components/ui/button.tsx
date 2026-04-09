@@ -9,9 +9,9 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = 'default', size = 'default', ...props }, ref) => {
     const variants = {
-      default: 'bg-neutral-900 text-white hover:bg-neutral-800',
-      outline: 'border border-neutral-200 bg-white hover:bg-neutral-50',
-      ghost: 'hover:bg-neutral-100',
+      default: 'bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200',
+      outline: 'border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 hover:bg-neutral-50 dark:hover:bg-neutral-800',
+      ghost: 'hover:bg-neutral-100 dark:hover:bg-neutral-800',
       destructive: 'bg-red-600 text-white hover:bg-red-700',
     }
     const sizes = {
