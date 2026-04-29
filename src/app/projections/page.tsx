@@ -5,6 +5,7 @@ import { useLiveQuery } from '@/hooks/useLiveQuery'
 import { db } from '@/lib/db'
 import { runProjection, runScenarios, type ProjectionParams } from '@/lib/calculations/projections'
 import { calculateCoastFI, calculateBaristaFI } from '@/lib/calculations/coast-fi'
+import { runMonteCarlo, type MonteCarloParams } from '@/lib/calculations/monte-carlo'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,7 +20,8 @@ import {
   AreaChart, Area, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
-import { Calculator, TrendingUp, Target, Calendar, Compass, Coffee, ArrowRight } from 'lucide-react'
+import { Calculator, TrendingUp, Target, Calendar, Compass, Coffee, ArrowRight, Dice5, Share2, Heart } from 'lucide-react'
+import { formatPercent } from '@/lib/utils'
 import Link from 'next/link'
 
 const defaultParams: ProjectionParams = {
@@ -76,6 +78,29 @@ export default function ProjectionsPage() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable))
   }, [params])
 
+  // Hydrate from URL hash if present (3.4)
+  const [sharedCopied, setSharedCopied] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const hash = window.location.hash.slice(1)
+    if (!hash) return
+    try {
+      const decoded = JSON.parse(atob(hash))
+      setParams(p => ({ ...p, ...decoded }))
+      // Clear hash after loading
+      window.history.replaceState(null, '', window.location.pathname)
+    } catch {}
+  }, [])
+
+  function handleShare() {
+    const { currentAssets: _ca, monthlySIP: _ms, monthlyExpenses: _me, ...shareable } = params
+    const encoded = btoa(JSON.stringify(shareable))
+    const url = `${window.location.origin}${window.location.pathname}#${encoded}`
+    navigator.clipboard.writeText(url)
+    setSharedCopied(true)
+    setTimeout(() => setSharedCopied(false), 2000)
+  }
+
   // Sync live data into params once as soon as it's available (on every mount).
   const [hasHydrated, setHasHydrated] = useState(false)
   useEffect(() => {
@@ -86,6 +111,7 @@ export default function ProjectionsPage() {
       currentAssets,
       monthlySIP: totalSIP,
       monthlyExpenses: profile?.monthlyExpenses || p.monthlyExpenses || 60000,
+      fiMultiplier: profile?.fiMultiplier ?? p.fiMultiplier ?? 25,
     }))
     setHasHydrated(true)
   }, [hasHydrated, investments, sips, profile, currentAssets, totalSIP])
@@ -109,6 +135,29 @@ export default function ProjectionsPage() {
     fiTarget: p.fiTarget,
     invested: p.totalInvested,
   }))
+
+  // FI milestone crossing years (3.3)
+  const fiMilestoneYears = useMemo(() => {
+    const milestones: { label: string; year: number; color: string }[] = []
+    const proj = result.projections
+    for (let i = 1; i < proj.length; i++) {
+      const leanTarget = proj[i].annualExpenses * params.fiMultiplier * 0.5
+      const fatTarget = proj[i].annualExpenses * params.fiMultiplier * 2
+      // Lean FI crossing
+      if (proj[i].portfolioValue >= leanTarget && proj[i - 1].portfolioValue < (proj[i - 1].annualExpenses * params.fiMultiplier * 0.5)) {
+        milestones.push({ label: `Lean FI`, year: proj[i].year, color: '#10b981' })
+      }
+      // Regular FI crossing (already tracked by result.fiYear, but add for consistency)
+      if (proj[i].fiReached && !proj[i - 1].fiReached) {
+        milestones.push({ label: `Regular FI`, year: proj[i].year, color: '#3b82f6' })
+      }
+      // Fat FI crossing
+      if (proj[i].portfolioValue >= fatTarget && proj[i - 1].portfolioValue < (proj[i - 1].annualExpenses * params.fiMultiplier * 2)) {
+        milestones.push({ label: `Fat FI`, year: proj[i].year, color: '#8b5cf6' })
+      }
+    }
+    return milestones
+  }, [result.projections, params.fiMultiplier])
 
   // ─── Multi-Scenario ───────────────────────────────────
   const scenarioResults = useMemo(() => {
@@ -167,6 +216,61 @@ export default function ProjectionsPage() {
     [params.monthlyExpenses, partTimeIncome, params.currentAssets, params.fiMultiplier]
   )
 
+  // Monte Carlo simulation (3.1)
+  const [mcStdDev, setMcStdDev] = useState(0.15)
+  const [mcSims, setMcSims] = useState(500)
+  const monteCarloResult = useMemo(() => {
+    const mcParams: MonteCarloParams = {
+      currentAssets: params.currentAssets,
+      monthlySIP: params.monthlySIP,
+      annualSIPIncrease: params.annualSIPIncrease,
+      expectedReturn: params.expectedReturn,
+      returnStdDev: mcStdDev,
+      monthlyExpenses: params.monthlyExpenses,
+      expenseInflation: params.expenseInflation,
+      yearsToProject: params.yearsToProject,
+      fiMultiplier: params.fiMultiplier,
+      numSimulations: mcSims,
+    }
+    return runMonteCarlo(mcParams)
+  }, [params, mcStdDev, mcSims])
+
+  // Parent care cost modeling (4.2)
+  const [parentCare, setParentCare] = useState({
+    monthlyCost: 0,
+    startYear: new Date().getFullYear() + 5,
+    endYear: new Date().getFullYear() + 25,
+    medicalInflation: 0.10,
+  })
+
+  const parentCareImpact = useMemo(() => {
+    if (parentCare.monthlyCost <= 0) return null
+    const currentYear = new Date().getFullYear()
+    let totalCost = 0
+    let currentCost = parentCare.monthlyCost * 12
+    for (let y = parentCare.startYear; y <= parentCare.endYear; y++) {
+      const yearsFromNow = y - currentYear
+      if (yearsFromNow > 0) {
+        const inflatedCost = currentCost * Math.pow(1 + parentCare.medicalInflation, yearsFromNow)
+        totalCost += inflatedCost
+      }
+    }
+    // Equivalent extra monthly expense (spread over projection period)
+    const months = params.yearsToProject * 12
+    const equivalentMonthly = months > 0 ? totalCost / months : 0
+    return { totalCost: Math.round(totalCost), equivalentMonthly: Math.round(equivalentMonthly) }
+  }, [parentCare, params.yearsToProject])
+
+  const mcChartData = monteCarloResult.yearData.map(d => ({
+    year: d.year,
+    p10: d.p10,
+    p25: d.p25,
+    p50: d.p50,
+    p75: d.p75,
+    p90: d.p90,
+    fiTarget: d.fiTarget,
+  }))
+
   return (
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-center justify-between">
@@ -174,17 +278,23 @@ export default function ProjectionsPage() {
           <h1 className="text-2xl font-bold">FI Projections</h1>
           <p className="text-neutral-500 dark:text-neutral-400 text-sm mt-1">Project when you'll reach financial independence</p>
         </div>
-        <Link href="/projections/whatif">
-          <Button variant="outline" size="sm">
-            <Compass className="h-4 w-4 mr-1" /> What-If Simulator
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleShare}>
+            <Share2 className="h-4 w-4 mr-1" /> {sharedCopied ? 'Copied!' : 'Share'}
           </Button>
-        </Link>
+          <Link href="/projections/whatif">
+            <Button variant="outline" size="sm">
+              <Compass className="h-4 w-4 mr-1" /> What-If Simulator
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <Tabs defaultValue="single">
         <TabsList>
           <TabsTrigger value="single">Single Projection</TabsTrigger>
           <TabsTrigger value="scenarios">Scenario Comparison</TabsTrigger>
+          <TabsTrigger value="montecarlo">Monte Carlo</TabsTrigger>
         </TabsList>
 
         {/* ─── Single Projection Tab ───────────────────────── */}
@@ -379,15 +489,16 @@ export default function ProjectionsPage() {
                       strokeDasharray="6 3"
                       name="FI Target"
                     />
-                    {result.fiYear && (
+                    {fiMilestoneYears.map(m => (
                       <ReferenceLine
-                        x={result.fiYear}
-                        stroke={colors.fiLine}
+                        key={m.label}
+                        x={m.year}
+                        stroke={m.color}
                         strokeWidth={2}
                         strokeDasharray="4 4"
-                        label={{ value: `FI ${result.fiYear}`, position: 'top', fontSize: 11, fill: colors.fiLine }}
+                        label={{ value: `${m.label} ${m.year}`, position: 'top', fontSize: 10, fill: m.color }}
                       />
-                    )}
+                    ))}
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -484,6 +595,67 @@ export default function ProjectionsPage() {
               >
                 Reset to current data
               </Button>
+            </CardContent>
+          </Card>
+
+          {/* Parent Care Cost Modeling (4.2) */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2"><Heart className="h-4 w-4" /> Parent Care Cost Modeling</CardTitle>
+              <CardDescription>Optional: model time-bounded parent care expenses with medical inflation</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div>
+                  <Label className="text-xs">Monthly Cost (today)</Label>
+                  <Input
+                    type="number"
+                    value={parentCare.monthlyCost || ''}
+                    onChange={e => setParentCare(p => ({ ...p, monthlyCost: Number(e.target.value) }))}
+                    className="h-8 text-sm"
+                    placeholder="e.g. 30000"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Start Year</Label>
+                  <Input
+                    type="number"
+                    value={parentCare.startYear}
+                    onChange={e => setParentCare(p => ({ ...p, startYear: Number(e.target.value) }))}
+                    className="h-8 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">End Year</Label>
+                  <Input
+                    type="number"
+                    value={parentCare.endYear}
+                    onChange={e => setParentCare(p => ({ ...p, endYear: Number(e.target.value) }))}
+                    className="h-8 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Medical Inflation (%)</Label>
+                  <Input
+                    type="number"
+                    step="1"
+                    value={Math.round(parentCare.medicalInflation * 100)}
+                    onChange={e => setParentCare(p => ({ ...p, medicalInflation: Number(e.target.value) / 100 }))}
+                    className="h-8 text-sm"
+                  />
+                </div>
+              </div>
+              {parentCareImpact && (
+                <div className="mt-3 rounded-lg bg-amber-50/50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3">
+                  <p className="text-sm">
+                    Total parent care cost: <span className="font-bold">{fmt(parentCareImpact.totalCost)}</span>
+                    {' · '}Equivalent to <span className="font-bold">{fmt(parentCareImpact.equivalentMonthly)}/mo</span> extra expense over {params.yearsToProject} years
+                  </p>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+                    Consider adding this to your monthly expenses for a more conservative FI timeline
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -644,6 +816,161 @@ export default function ProjectionsPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ─── Monte Carlo Tab ───────────────────────────────── */}
+        <TabsContent value="montecarlo" className="mt-4 space-y-6">
+          {/* MC Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-neutral-500 dark:text-neutral-400 text-xs mb-1">
+                  <Dice5 className="h-3.5 w-3.5" /> Success Rate
+                </div>
+                <p className={`text-lg font-bold ${monteCarloResult.overallSuccessRate >= 0.8 ? 'text-emerald-600' : monteCarloResult.overallSuccessRate >= 0.5 ? 'text-amber-600' : 'text-red-600'}`}>
+                  {formatPercent(monteCarloResult.overallSuccessRate)}
+                </p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  probability of FI in {params.yearsToProject}y
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-neutral-500 dark:text-neutral-400 text-xs mb-1">
+                  <Target className="h-3.5 w-3.5" /> Median FI Year
+                </div>
+                <p className="text-lg font-bold">{monteCarloResult.medianFIYear ?? 'N/A'}</p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">50th percentile</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-neutral-500 dark:text-neutral-400 text-xs mb-1">
+                  <TrendingUp className="h-3.5 w-3.5" /> Best Case (p10)
+                </div>
+                <p className="text-lg font-bold text-emerald-600">{monteCarloResult.p10FIYear ?? 'N/A'}</p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">optimistic 10th pctl</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-neutral-500 dark:text-neutral-400 text-xs mb-1">
+                  <Calendar className="h-3.5 w-3.5" /> Worst Case (p90)
+                </div>
+                <p className="text-lg font-bold text-red-600">{monteCarloResult.p90FIYear ?? 'N/A'}</p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">pessimistic 90th pctl</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Fan Chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Monte Carlo Fan Chart</CardTitle>
+              <CardDescription>{mcSims} simulations · {(mcStdDev * 100).toFixed(0)}% volatility · Shaded bands show p10-p90 range</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={mcChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
+                    <XAxis
+                      dataKey="year"
+                      tick={{ fontSize: 11, fill: colors.axis }}
+                      interval={Math.floor(params.yearsToProject / 10)}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: colors.axis }}
+                      tickFormatter={(v) => {
+                        if (v >= 10000000) return `${(v / 10000000).toFixed(1)}Cr`
+                        if (v >= 100000) return `${(v / 100000).toFixed(0)}L`
+                        return `${(v / 1000).toFixed(0)}K`
+                      }}
+                    />
+                    <Tooltip
+                      formatter={(v: any) => fmt(Number(v))}
+                      contentStyle={{ backgroundColor: colors.tooltip, border: `1px solid ${colors.tooltipBorder}` }}
+                    />
+                    <Area type="monotone" dataKey="p90" stackId="" fill={isDark ? '#1a3a1a' : '#dcfce7'} stroke="none" fillOpacity={0.4} name="p90 (optimistic)" />
+                    <Area type="monotone" dataKey="p75" stackId="" fill={isDark ? '#1a3a2a' : '#bbf7d0'} stroke="none" fillOpacity={0.3} name="p75" />
+                    <Area type="monotone" dataKey="p50" stackId="" fill="none" stroke={colors.portfolio} strokeWidth={2} name="Median (p50)" />
+                    <Area type="monotone" dataKey="p25" stackId="" fill="none" stroke={isDark ? '#737373' : '#a3a3a3'} strokeWidth={1} strokeDasharray="4 2" name="p25" />
+                    <Area type="monotone" dataKey="p10" stackId="" fill={isDark ? '#3a1a1a' : '#fee2e2'} stroke="none" fillOpacity={0.3} name="p10 (pessimistic)" />
+                    <Area type="monotone" dataKey="fiTarget" fill="none" stroke={colors.fiTarget} strokeWidth={2} strokeDasharray="6 3" name="FI Target" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* MC Parameters */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Simulation Parameters</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div>
+                  <Label className="text-xs">Return Std Dev (%)</Label>
+                  <Input
+                    type="number"
+                    step="1"
+                    value={Math.round(mcStdDev * 100)}
+                    onChange={e => setMcStdDev(Math.max(1, Math.min(50, Number(e.target.value))) / 100)}
+                    className="h-8 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Simulations</Label>
+                  <Input
+                    type="number"
+                    step="100"
+                    value={mcSims}
+                    onChange={e => setMcSims(Math.max(100, Math.min(2000, Number(e.target.value))))}
+                    className="h-8 text-sm"
+                  />
+                </div>
+                <div className="flex items-end col-span-2">
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400 pb-2">
+                    Mean return: {(params.expectedReturn * 100).toFixed(0)}% · Volatility: {(mcStdDev * 100).toFixed(0)}% · {mcSims} runs
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Success Rate Over Time */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">FI Probability Over Time</CardTitle>
+              <CardDescription>Cumulative % of simulations that reached FI by each year</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={monteCarloResult.yearData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
+                    <XAxis
+                      dataKey="year"
+                      tick={{ fontSize: 11, fill: colors.axis }}
+                      interval={Math.floor(params.yearsToProject / 10)}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: colors.axis }}
+                      tickFormatter={(v) => `${(v * 100).toFixed(0)}%`}
+                      domain={[0, 1]}
+                    />
+                    <Tooltip
+                      formatter={(v: any) => formatPercent(Number(v))}
+                      contentStyle={{ backgroundColor: colors.tooltip, border: `1px solid ${colors.tooltipBorder}` }}
+                    />
+                    <Area type="monotone" dataKey="successRate" fill={isDark ? '#1a3a1a' : '#dcfce7'} stroke="#22c55e" strokeWidth={2} fillOpacity={0.3} name="FI Probability" />
+                  </AreaChart>
+                </ResponsiveContainer>
               </div>
             </CardContent>
           </Card>

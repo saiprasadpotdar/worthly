@@ -5,6 +5,7 @@ import { useLiveQuery } from '@/hooks/useLiveQuery'
 import { db } from '@/lib/db'
 import { useMasked } from '@/hooks/useMasked'
 import type { Goal, Investment } from '@/types'
+import { formatPercent } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,7 +15,8 @@ import { Progress } from '@/components/ui/progress'
 import { Dialog } from '@/components/ui/dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useConfirm } from '@/hooks/useConfirm'
-import { Target, Plus, Edit2, Trash2, TrendingUp, PieChart } from 'lucide-react'
+import { Target, Plus, Edit2, Trash2, TrendingUp, PieChart, GraduationCap } from 'lucide-react'
+import { calculateEducationPlan, type EducationPlanParams } from '@/lib/calculations/education'
 
 /**
  * Solve for the annual return rate (CAGR) needed to grow `currentValue` plus
@@ -71,6 +73,19 @@ export default function GoalsPage() {
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null)
   const [form, setForm] = useState({ name: '', targetCorpus: 0, targetYear: new Date().getFullYear() + 10, color: '#171717' })
 
+  // Education planner (4.3)
+  const [showEduPlanner, setShowEduPlanner] = useState(false)
+  const [eduForm, setEduForm] = useState<EducationPlanParams>({
+    currentAnnualFees: 500000,
+    yearsOfStudy: 4,
+    childCurrentAge: 5,
+    targetAdmissionAge: 18,
+    educationInflation: 0.10,
+    expectedReturn: 0.12,
+    currentCorpus: 0,
+  })
+  const eduResult = useMemo(() => calculateEducationPlan(eduForm), [eduForm])
+
   const goalList = goals ?? []
   const inv = investments ?? []
   const sipList = sips ?? []
@@ -102,6 +117,20 @@ export default function GoalsPage() {
       const debt = goalInv.filter(i => i.assetClass === 'debt' || i.assetClass === 'fixed').reduce((s, i) => s + i.currentValue, 0)
       const real = goalInv.filter(i => i.assetClass === 'real_estate').reduce((s, i) => s + i.currentValue, 0)
 
+      // P&L % and simple CAGR (2.3)
+      const pl = currentValue - investedValue
+      const plPercent = investedValue > 0 ? pl / investedValue : 0
+
+      // CAGR = (current/invested)^(1/years) - 1 using earliest startDate
+      const earliestDate = goalInv.reduce((min, i) => {
+        const d = i.startDate
+        return d && d < min ? d : min
+      }, new Date().toISOString().split('T')[0])
+      const yearsHeld = (Date.now() - new Date(earliestDate).getTime()) / (365.25 * 24 * 60 * 60 * 1000)
+      const cagr = investedValue > 0 && yearsHeld >= 0.5 && currentValue > 0
+        ? Math.pow(currentValue / investedValue, 1 / yearsHeld) - 1
+        : null
+
       return {
         ...g,
         currentValue,
@@ -115,7 +144,9 @@ export default function GoalsPage() {
         equity,
         debt,
         real,
-        pl: currentValue - investedValue,
+        pl,
+        plPercent,
+        cagr,
       }
     })
   }, [goalList, inv, sipList])
@@ -186,9 +217,14 @@ export default function GoalsPage() {
           <h1 className="text-2xl font-bold">Goals</h1>
           <p className="text-neutral-500 dark:text-neutral-400 text-sm mt-1">Track progress towards your financial goals</p>
         </div>
-        <Button onClick={openAdd}>
-          <Plus className="h-4 w-4 mr-1" /> Add Goal
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setShowEduPlanner(true)}>
+            <GraduationCap className="h-4 w-4 mr-1" /> Education Planner
+          </Button>
+          <Button onClick={openAdd}>
+            <Plus className="h-4 w-4 mr-1" /> Add Goal
+          </Button>
+        </div>
       </div>
 
       {/* Goal Cards */}
@@ -273,8 +309,13 @@ export default function GoalsPage() {
                   <div>
                     <p className="text-neutral-400 dark:text-neutral-500 text-xs">P&L</p>
                     <p className={`font-medium ${g.pl >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {g.pl >= 0 ? '+' : ''}{fmt(g.pl)}
+                      {g.pl >= 0 ? '+' : ''}{fmt(g.pl)} ({g.pl >= 0 ? '+' : ''}{formatPercent(g.plPercent)})
                     </p>
+                    {g.cagr !== null && (
+                      <p className="text-[10px] text-neutral-400 dark:text-neutral-500">
+                        CAGR: {formatPercent(g.cagr)}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <p className="text-neutral-400 dark:text-neutral-500 text-xs">Monthly SIP</p>
@@ -390,6 +431,69 @@ export default function GoalsPage() {
             <Button onClick={handleSave} disabled={!form.name.trim()}>
               {editingGoal ? 'Save Changes' : 'Add Goal'}
             </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      {/* Education Planner Dialog (4.3) */}
+      <Dialog open={showEduPlanner} onClose={() => setShowEduPlanner(false)} title="Education Cost Planner">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Current Annual Fees</Label>
+              <Input type="number" value={eduForm.currentAnnualFees || ''} onChange={e => setEduForm(f => ({ ...f, currentAnnualFees: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <Label>Years of Study</Label>
+              <Input type="number" value={eduForm.yearsOfStudy} onChange={e => setEduForm(f => ({ ...f, yearsOfStudy: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <Label>Child's Current Age</Label>
+              <Input type="number" value={eduForm.childCurrentAge} onChange={e => setEduForm(f => ({ ...f, childCurrentAge: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <Label>Target Admission Age</Label>
+              <Input type="number" value={eduForm.targetAdmissionAge} onChange={e => setEduForm(f => ({ ...f, targetAdmissionAge: Number(e.target.value) }))} />
+            </div>
+            <div>
+              <Label>Education Inflation (%)</Label>
+              <Input type="number" step="1" value={Math.round(eduForm.educationInflation * 100)} onChange={e => setEduForm(f => ({ ...f, educationInflation: Number(e.target.value) / 100 }))} />
+            </div>
+            <div>
+              <Label>Expected SIP Return (%)</Label>
+              <Input type="number" step="1" value={Math.round(eduForm.expectedReturn * 100)} onChange={e => setEduForm(f => ({ ...f, expectedReturn: Number(e.target.value) / 100 }))} />
+            </div>
+            <div className="col-span-2">
+              <Label>Already Saved for This Goal</Label>
+              <Input type="number" value={eduForm.currentCorpus || ''} onChange={e => setEduForm(f => ({ ...f, currentCorpus: Number(e.target.value) }))} />
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-neutral-50 dark:bg-neutral-800 p-4 space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-neutral-500 dark:text-neutral-400">Years to go</span>
+              <span className="font-medium">{eduResult.yearsToGo}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-neutral-500 dark:text-neutral-400">Future annual cost (at admission)</span>
+              <span className="font-medium">{fmt(eduResult.futureAnnualCost)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-neutral-500 dark:text-neutral-400">Total future cost ({eduForm.yearsOfStudy}y study)</span>
+              <span className="font-bold">{fmt(eduResult.futureTotalCost)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-neutral-500 dark:text-neutral-400">Gap after existing savings</span>
+              <span className="font-medium text-amber-600">{fmt(eduResult.gap)}</span>
+            </div>
+            <div className="flex justify-between text-sm border-t border-neutral-200 dark:border-neutral-700 pt-2 mt-2">
+              <span className="text-neutral-500 dark:text-neutral-400">Required monthly SIP</span>
+              <span className="font-bold text-lg text-emerald-600">{fmt(eduResult.requiredMonthlySIP)}</span>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button variant="outline" onClick={() => setShowEduPlanner(false)}>Close</Button>
           </div>
         </div>
       </Dialog>

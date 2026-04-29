@@ -201,6 +201,9 @@ export default function SIPsPage() {
                 <option value="equity">Equity</option>
                 <option value="debt">Debt</option>
                 <option value="fixed">Fixed Income</option>
+                <option value="epf">EPF</option>
+                <option value="ppf">PPF</option>
+                <option value="nps">NPS</option>
               </Select>
             </div>
           </div>

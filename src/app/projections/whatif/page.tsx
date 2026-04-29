@@ -15,7 +15,7 @@ import {
   LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
-import { ArrowLeft, RotateCcw, TrendingUp, TrendingDown, Zap, Target, Wand2 } from 'lucide-react'
+import { ArrowLeft, RotateCcw, TrendingUp, TrendingDown, Zap, Target, Wand2, Share2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import Link from 'next/link'
@@ -179,6 +179,28 @@ export default function WhatIfPage() {
 
   const [whatIfParams, setWhatIfParams] = useState<ProjectionParams>(() => ({ ...baseParams }))
 
+  // Hydrate from URL hash if present (3.4)
+  const [sharedCopied, setSharedCopied] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const hash = window.location.hash.slice(1)
+    if (!hash) return
+    try {
+      const decoded = JSON.parse(atob(hash))
+      setWhatIfParams(p => ({ ...p, ...decoded }))
+      window.history.replaceState(null, '', window.location.pathname)
+    } catch {}
+  }, [])
+
+  function handleShare() {
+    const { currentAssets: _ca, monthlySIP: _ms, monthlyExpenses: _me, ...shareable } = whatIfParams
+    const encoded = btoa(JSON.stringify(shareable))
+    const url = `${window.location.origin}${window.location.pathname}#${encoded}`
+    navigator.clipboard.writeText(url)
+    setSharedCopied(true)
+    setTimeout(() => setSharedCopied(false), 2000)
+  }
+
   // Hydrate live data into both base and what-if params once on mount.
   const [hasHydrated, setHasHydrated] = useState(false)
   useEffect(() => {
@@ -188,6 +210,7 @@ export default function WhatIfPage() {
       currentAssets: liveCurrentAssets,
       monthlySIP: liveTotalSIP,
       monthlyExpenses: profile?.monthlyExpenses || 60000,
+      fiMultiplier: profile?.fiMultiplier ?? 25,
     }
     setBaseParams(p => ({ ...p, ...liveFields }))
     setWhatIfParams(p => ({ ...p, ...liveFields }))
@@ -387,9 +410,14 @@ export default function WhatIfPage() {
             <p className="text-neutral-500 dark:text-neutral-400 text-sm mt-1">See how changes affect your FI timeline</p>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={resetToBase}>
-          <RotateCcw className="h-3.5 w-3.5 mr-1" /> Reset
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleShare}>
+            <Share2 className="h-3.5 w-3.5 mr-1" /> {sharedCopied ? 'Copied!' : 'Share'}
+          </Button>
+          <Button variant="outline" size="sm" onClick={resetToBase}>
+            <RotateCcw className="h-3.5 w-3.5 mr-1" /> Reset
+          </Button>
+        </div>
       </div>
 
       {/* Scenario Templates */}

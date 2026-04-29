@@ -6,7 +6,7 @@ import { useMasked } from '@/hooks/useMasked'
 import { useApp } from '@/context/app-context'
 import { db, captureSnapshot, seedDefaultMilestones } from '@/lib/db'
 import { formatPercent, getChartColors } from '@/lib/utils'
-import { calculateLeanFI, calculateRegularFI, calculateFatFI } from '@/lib/calculations/fi'
+import { runProjection, type ProjectionParams } from '@/lib/calculations/projections'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -27,6 +27,7 @@ export default function TimelinePage() {
   const milestones = useLiveQuery(() => db.milestones.toArray(), [])
   const investments = useLiveQuery(() => db.investments.toArray(), [])
   const properties = useLiveQuery(() => db.properties.toArray(), [])
+  const sips = useLiveQuery(() => db.sips.toArray().then(all => all.filter(s => s.active)), [])
   const [snapping, setSnapping] = useState(false)
   const { confirm, confirmProps } = useConfirm()
 
@@ -44,12 +45,13 @@ export default function TimelinePage() {
   const previous = snaps.length >= 2 ? snaps[snaps.length - 2] : null
   const monthlyChange = latest && previous ? latest.netWorth - previous.netWorth : 0
 
-  // FI targets
+  // FI targets — read configurable multiplier from user profile (Settings)
   const monthlyExpenses = profile?.monthlyExpenses || 60000
   const annualExpenses = monthlyExpenses * 12
-  const leanFI = calculateLeanFI(annualExpenses)
-  const regularFI = calculateRegularFI(leanFI)
-  const fatFI = calculateFatFI(regularFI)
+  const fiMultiplier = profile?.fiMultiplier ?? 25
+  const regularFI = annualExpenses * fiMultiplier
+  const leanFI = regularFI * 0.5
+  const fatFI = regularFI * 2
 
   // Chart data
   const chartData = snaps.map(s => ({
@@ -59,40 +61,57 @@ export default function TimelinePage() {
     liabilities: s.totalLiabilities,
   }))
 
-  // FI Projection: project future net worth based on recent growth rate
-  const projectionData = useMemo(() => {
-    if (snaps.length < 2 || !latest) return []
-
-    // Average monthly growth from recent snapshots (last 6 or all available)
-    const recent = snaps.slice(-Math.min(snaps.length, 6))
-    const growths: number[] = []
-    for (let i = 1; i < recent.length; i++) {
-      growths.push(recent[i].netWorth - recent[i - 1].netWorth)
-    }
-    const avgMonthlyGrowth = growths.length > 0 ? growths.reduce((a, b) => a + b, 0) / growths.length : 0
-    if (avgMonthlyGrowth <= 0) return []
-
-    // Project until fat FI or 20 years, whichever comes first
-    const points: { label: string; projected: number }[] = []
-    let projected = latest.netWorth
-    let year = latest.year
-    let month = latest.month
-
-    for (let i = 0; i < 240; i++) {
-      month++
-      if (month > 12) { month = 1; year++ }
-      // Compound growth: assume 12% annual return on existing + monthly savings addition
-      projected += avgMonthlyGrowth
-      if (i % 3 === 0) { // every 3 months for chart readability
-        points.push({
-          label: `${MONTHS[month - 1]} ${String(year).slice(2)}`,
-          projected,
-        })
+  // Allocation over time data (2.1) — stacked from snapshot equity/debt/realAssets
+  const [showAllocPercent, setShowAllocPercent] = useState(false)
+  const allocationTimeData = snaps.map(s => {
+    const total = s.equity + s.debt + s.realAssets
+    if (showAllocPercent && total > 0) {
+      return {
+        label: `${MONTHS[s.month - 1]} ${String(s.year).slice(2)}`,
+        equity: (s.equity / total) * 100,
+        debt: (s.debt / total) * 100,
+        realAssets: (s.realAssets / total) * 100,
       }
-      if (projected >= fatFI) break
     }
-    return points
-  }, [snaps, latest, fatFI])
+    return {
+      label: `${MONTHS[s.month - 1]} ${String(s.year).slice(2)}`,
+      equity: s.equity,
+      debt: s.debt,
+      realAssets: s.realAssets,
+    }
+  })
+
+  // FI Projection: use compound growth via runProjection (1.11)
+  const projectionData = useMemo(() => {
+    if (!latest) return []
+
+    // Read stored assumption params from localStorage
+    let storedParams = { expectedReturn: 0.12, expenseInflation: 0.07, annualSIPIncrease: 0.10, fiMultiplier: 25, yearsToProject: 30 }
+    try {
+      const saved = typeof window !== 'undefined' ? localStorage.getItem('worthly-projection-params') : null
+      if (saved) storedParams = { ...storedParams, ...JSON.parse(saved) }
+    } catch {}
+
+    const totalSIP = (sips ?? []).reduce((s, sip) => s + sip.amount, 0)
+    const params: ProjectionParams = {
+      currentAssets: latest.netWorth,
+      monthlySIP: totalSIP > 0 ? totalSIP : 50000,
+      annualSIPIncrease: storedParams.annualSIPIncrease,
+      expectedReturn: storedParams.expectedReturn,
+      inflationRate: 0.06,
+      monthlyExpenses: monthlyExpenses,
+      expenseInflation: storedParams.expenseInflation,
+      yearsToProject: Math.min(storedParams.yearsToProject, 30),
+      fiMultiplier: storedParams.fiMultiplier,
+    }
+
+    const result = runProjection(params, profile?.birthYear)
+    // Convert to chart data, sampling every year, starting from latest snapshot date
+    return result.projections.slice(1).map(p => ({
+      label: `${String(p.year)}`,
+      projected: p.portfolioValue,
+    }))
+  }, [latest, sips, monthlyExpenses, profile?.birthYear])
 
   // Milestone check — based on live total assets (investments + properties)
   const currentNW = latest?.netWorth ?? 0
@@ -220,6 +239,39 @@ export default function TimelinePage() {
         </Card>
       )}
 
+      {/* Allocation Over Time (2.1) */}
+      {allocationTimeData.length > 1 && allocationTimeData.some(d => d.equity > 0 || d.debt > 0 || d.realAssets > 0) && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Allocation Over Time</CardTitle>
+              <button
+                onClick={() => setShowAllocPercent(p => !p)}
+                className="text-xs text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 border border-neutral-200 dark:border-neutral-700 rounded px-2 py-1"
+              >
+                {showAllocPercent ? '₹ Values' : '% Split'}
+              </button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={allocationTimeData}>
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis
+                  tickFormatter={(v) => showAllocPercent ? `${v.toFixed(0)}%` : fmt(v, true)}
+                  tick={{ fontSize: 11 }}
+                  width={70}
+                />
+                <Tooltip formatter={(v: any) => showAllocPercent ? `${Number(v).toFixed(1)}%` : fmt(Number(v))} />
+                <Area type="monotone" dataKey="equity" stackId="1" fill="#10b981" stroke="#10b981" fillOpacity={0.6} name="Equity" />
+                <Area type="monotone" dataKey="debt" stackId="1" fill="#3b82f6" stroke="#3b82f6" fillOpacity={0.6} name="Debt" />
+                <Area type="monotone" dataKey="realAssets" stackId="1" fill="#f59e0b" stroke="#f59e0b" fillOpacity={0.6} name="Real Estate" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Milestones */}
       <Card>
         <CardHeader>
@@ -239,7 +291,14 @@ export default function TimelinePage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between mb-0.5">
                       <span className={`text-sm font-medium ${achieved ? 'text-emerald-700 dark:text-emerald-400' : ''}`}>{m.label}</span>
-                      <span className="text-xs text-neutral-400 dark:text-neutral-500">{formatPercent(progress)}</span>
+                      <div className="flex items-center gap-2">
+                        {m.achievedDate && (
+                          <span className="text-xs text-emerald-600 dark:text-emerald-400">
+                            {m.achievedDate.slice(0, 7)}{m.monthsTaken ? ` (${m.monthsTaken}mo)` : ''}
+                          </span>
+                        )}
+                        <span className="text-xs text-neutral-400 dark:text-neutral-500">{formatPercent(progress)}</span>
+                      </div>
                     </div>
                     <div className="h-1.5 bg-neutral-100 dark:bg-neutral-800 rounded-full overflow-hidden">
                       <div

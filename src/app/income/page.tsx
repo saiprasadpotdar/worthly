@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useLiveQuery } from '@/hooks/useLiveQuery'
 import { useMasked } from '@/hooks/useMasked'
 import { useApp } from '@/context/app-context'
@@ -14,7 +14,8 @@ import { Label } from '@/components/ui/label'
 import { Dialog } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Plus, Trash2, Edit2, Wallet, ArrowUpRight, ArrowDownRight } from 'lucide-react'
+import { Plus, Trash2, Edit2, Wallet, ArrowUpRight, ArrowDownRight, Scale } from 'lucide-react'
+import { compareTaxRegimes, type TaxInputs } from '@/lib/calculations/tax-regime'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
 export default function IncomePage() {
@@ -26,12 +27,22 @@ export default function IncomePage() {
   const [editing, setEditing] = useState<AnnualIncome | null>(null)
   const [form, setForm] = useState({ year: '', grossSalary: 0, taxes: 0, netIncome: 0 })
 
+  const profile = useLiveQuery(() => db.userProfile.toCollection().first(), [])
+  const loans = useLiveQuery(() => db.loans.toArray(), [])
+
   const incomes = annualIncomes ?? []
   const latest = incomes[incomes.length - 1]
   const previous = incomes[incomes.length - 2]
   const growth = latest && previous && previous.netIncome > 0
     ? (latest.netIncome - previous.netIncome) / previous.netIncome
     : 0
+
+  // Savings rate = (income - expenses - EMI) / income (2.2)
+  const monthlyExpenses = profile?.monthlyExpenses || 0
+  const monthlyEmi = profile?.monthlyEmi || 0
+  const totalEmi = (loans ?? []).reduce((s, l) => s + l.emi, 0) || monthlyEmi
+  const annualExpensesTotal = monthlyExpenses * 12 + totalEmi * 12
+  const savingsRate = latest && latest.netIncome > 0 ? Math.max(0, (latest.netIncome - annualExpensesTotal) / latest.netIncome) : 0
 
   function openAdd() {
     const currentFY = new Date().getMonth() >= 3
@@ -68,6 +79,7 @@ export default function IncomePage() {
     gross: i.grossSalary,
     taxes: i.taxes,
     net: i.netIncome,
+    savingsRate: i.netIncome > 0 ? Math.max(0, (i.netIncome - annualExpensesTotal) / i.netIncome) : 0,
   }))
 
   return (
@@ -91,7 +103,7 @@ export default function IncomePage() {
       ) : (
         <>
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card>
               <CardContent className="p-5">
                 <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-1">Latest Net Income</p>
@@ -116,6 +128,15 @@ export default function IncomePage() {
                 <p className="text-xl font-bold">
                   {latest && latest.grossSalary > 0 ? formatPercent(latest.taxes / latest.grossSalary) : '—'}
                 </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5">
+                <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-1">Savings Rate</p>
+                <p className={`text-xl font-bold ${savingsRate >= 0.3 ? 'text-emerald-600' : savingsRate >= 0.15 ? 'text-amber-600' : 'text-red-600'}`}>
+                  {savingsRate > 0 ? formatPercent(savingsRate) : '—'}
+                </p>
+                <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">(Income - Expenses - EMI) / Income</p>
               </CardContent>
             </Card>
           </div>
@@ -191,6 +212,9 @@ export default function IncomePage() {
         </>
       )}
 
+      {/* Tax Regime Comparison (4.4) */}
+      <TaxRegimeSection formatCurrency={formatCurrency} grossSalary={latest?.grossSalary || 0} />
+
       {/* Add/Edit Dialog */}
       <Dialog open={showForm} onClose={() => setShowForm(false)} title={editing ? 'Edit Income Year' : 'Add Income Year'}>
         <div className="space-y-4">
@@ -216,5 +240,141 @@ export default function IncomePage() {
         </div>
       </Dialog>
     </div>
+  )
+}
+
+/** Tax Regime Comparison Component (4.4) */
+function TaxRegimeSection({ formatCurrency, grossSalary }: { formatCurrency: (v: number, compact?: boolean) => string; grossSalary: number }) {
+  const [taxInputs, setTaxInputs] = useState<TaxInputs>({
+    grossSalary: grossSalary || 1500000,
+    hra: 0,
+    section80C: 150000,
+    section80D: 25000,
+    npsEmployer80CCD2: 0,
+    npsEmployee80CCD1B: 0,
+    homeLoanInterest: 0,
+    otherDeductions: 0,
+  })
+
+  // Update gross salary when it changes from props
+  const [prevGross, setPrevGross] = useState(grossSalary)
+  if (grossSalary > 0 && grossSalary !== prevGross) {
+    setPrevGross(grossSalary)
+    setTaxInputs(t => ({ ...t, grossSalary }))
+  }
+
+  const result = useMemo(() => compareTaxRegimes(taxInputs), [taxInputs])
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Scale className="h-4 w-4" /> Tax Regime Comparison
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div>
+            <Label className="text-xs">Gross Salary</Label>
+            <Input
+              type="number"
+              value={taxInputs.grossSalary || ''}
+              onChange={e => setTaxInputs(t => ({ ...t, grossSalary: Number(e.target.value) }))}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">HRA Exemption</Label>
+            <Input
+              type="number"
+              value={taxInputs.hra || ''}
+              onChange={e => setTaxInputs(t => ({ ...t, hra: Number(e.target.value) }))}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">80C (max 1.5L)</Label>
+            <Input
+              type="number"
+              value={taxInputs.section80C || ''}
+              onChange={e => setTaxInputs(t => ({ ...t, section80C: Number(e.target.value) }))}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">80D (Health)</Label>
+            <Input
+              type="number"
+              value={taxInputs.section80D || ''}
+              onChange={e => setTaxInputs(t => ({ ...t, section80D: Number(e.target.value) }))}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">NPS Employer (80CCD2)</Label>
+            <Input
+              type="number"
+              value={taxInputs.npsEmployer80CCD2 || ''}
+              onChange={e => setTaxInputs(t => ({ ...t, npsEmployer80CCD2: Number(e.target.value) }))}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">NPS Self (80CCD1B, max 50K)</Label>
+            <Input
+              type="number"
+              value={taxInputs.npsEmployee80CCD1B || ''}
+              onChange={e => setTaxInputs(t => ({ ...t, npsEmployee80CCD1B: Number(e.target.value) }))}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">Home Loan Interest (24b)</Label>
+            <Input
+              type="number"
+              value={taxInputs.homeLoanInterest || ''}
+              onChange={e => setTaxInputs(t => ({ ...t, homeLoanInterest: Number(e.target.value) }))}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">Other Deductions</Label>
+            <Input
+              type="number"
+              value={taxInputs.otherDeductions || ''}
+              onChange={e => setTaxInputs(t => ({ ...t, otherDeductions: Number(e.target.value) }))}
+              className="h-8 text-sm"
+            />
+          </div>
+        </div>
+
+        {/* Results */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className={`rounded-lg border p-4 ${result.recommendation === 'old' ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/30 dark:bg-emerald-950/30' : 'border-neutral-200 dark:border-neutral-800'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold">Old Regime</span>
+              {result.recommendation === 'old' && <Badge variant="success">Recommended</Badge>}
+            </div>
+            <p className="text-lg font-bold">{formatCurrency(result.oldRegimeTax, true)}</p>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+              Deductions: {formatCurrency(result.oldDeductions, true)} · Taxable: {formatCurrency(result.oldTaxableIncome, true)}
+            </p>
+          </div>
+          <div className={`rounded-lg border p-4 ${result.recommendation === 'new' ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/30 dark:bg-emerald-950/30' : 'border-neutral-200 dark:border-neutral-800'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold">New Regime</span>
+              {result.recommendation === 'new' && <Badge variant="success">Recommended</Badge>}
+            </div>
+            <p className="text-lg font-bold">{formatCurrency(result.newRegimeTax, true)}</p>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+              Deductions: {formatCurrency(result.newDeductions, true)} · Taxable: {formatCurrency(result.newTaxableIncome, true)}
+            </p>
+          </div>
+        </div>
+        <p className="text-xs text-emerald-600 font-medium">
+          You save {formatCurrency(result.savings, true)} with the {result.recommendation} regime
+        </p>
+      </CardContent>
+    </Card>
   )
 }

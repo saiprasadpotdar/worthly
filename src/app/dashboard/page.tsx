@@ -6,23 +6,27 @@ import { db } from '@/lib/db'
 import { formatPercent, getChartColors } from '@/lib/utils'
 import { useApp } from '@/context/app-context'
 import {
-  calculateLeanFI,
-  calculateRegularFI,
-  calculateFatFI,
   calculateFIProgress,
   calculateYearsToFI,
   calculateSavedYears,
   calculateRatios,
 } from '@/lib/calculations/fi'
+import { calculateCoastFI } from '@/lib/calculations/coast-fi'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
-import { TrendingUp, Target, PiggyBank, Shield, ArrowUpRight, ArrowDownRight, Wallet, Landmark, LayoutDashboard, AlertTriangle, Trophy } from 'lucide-react'
+import { TrendingUp, Target, PiggyBank, Shield, ArrowUpRight, ArrowDownRight, Wallet, Landmark, LayoutDashboard, AlertTriangle, Trophy, Compass, BarChart3 } from 'lucide-react'
 import Link from 'next/link'
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
-import { useEffect } from 'react'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from 'recharts'
+import { useEffect, useState, useMemo } from 'react'
 import { seedDefaultMilestones } from '@/lib/db'
+
+const ALLOCATION_COLORS: Record<string, string> = {
+  Equity: '#10b981',    // emerald-500
+  Debt: '#3b82f6',      // blue-500
+  'Real Estate': '#f59e0b', // amber-500
+}
 
 export default function DashboardPage() {
   const { isDark } = useApp()
@@ -40,6 +44,23 @@ export default function DashboardPage() {
   const sips = useLiveQuery(() => db.sips.toArray(), [])
 
   useEffect(() => { seedDefaultMilestones() }, [])
+
+  // Read assumption params from projections localStorage (return/inflation are
+  // tweaked on the projections page, not in Settings).
+  const projectionParams = useMemo(() => {
+    if (typeof window === 'undefined') return { expectedReturn: 0.12, expenseInflation: 0.07 }
+    try {
+      const saved = localStorage.getItem('worthly-projection-params')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        return {
+          expectedReturn: parsed.expectedReturn ?? 0.12,
+          expenseInflation: parsed.expenseInflation ?? 0.07,
+        }
+      }
+    } catch {}
+    return { expectedReturn: 0.12, expenseInflation: 0.07 }
+  }, [])
 
   if (!profile) {
     return (
@@ -62,19 +83,22 @@ export default function DashboardPage() {
   const snaps = snapshots ?? []
 
   const totalEquity = inv.filter(i => i.assetClass === 'equity').reduce((s, i) => s + i.currentValue, 0)
-  const totalDebt = inv.filter(i => i.assetClass === 'debt' || i.assetClass === 'fixed').reduce((s, i) => s + i.currentValue, 0)
+  const totalDebt = inv.filter(i => ['debt', 'fixed', 'epf', 'ppf', 'nps'].includes(i.assetClass)).reduce((s, i) => s + i.currentValue, 0)
   const totalLiquid = inv.filter(i => i.assetClass !== 'real_estate').reduce((s, i) => s + i.currentValue, 0)
   const totalInvRealEstate = inv.filter(i => i.assetClass === 'real_estate').reduce((s, i) => s + i.currentValue, 0)
   const totalRealAssets = props.reduce((s, p) => s + p.currentMarketValue, 0) + totalInvRealEstate
   const totalAssets = totalLiquid + totalRealAssets
-  const totalLiabilities = lns.reduce((s, l) => s + l.balance, 0)
+  const propertyMortgages = props.reduce((s, p) => s + (p.outstandingPrincipal || 0), 0)
+  const totalLiabilities = lns.reduce((s, l) => s + l.balance, 0) + propertyMortgages
   const netWorth = totalAssets - totalLiabilities
 
   const monthlyExpenses = profile.monthlyExpenses || 60000
   const annualExpenses = monthlyExpenses * 12
-  const leanFI = calculateLeanFI(annualExpenses)
-  const regularFI = calculateRegularFI(leanFI)
-  const fatFI = calculateFatFI(regularFI)
+
+  const fiMultiplier = profile.fiMultiplier ?? 25
+  const regularFI = annualExpenses * fiMultiplier
+  const leanFI = regularFI * 0.5
+  const fatFI = regularFI * 2
 
   const goalList = goals ?? []
   const retirementInv = inv.filter(i => i.goal?.toLowerCase() === 'retirement')
@@ -137,6 +161,24 @@ export default function DashboardPage() {
   const nextMilestone = mstones.filter(m => totalAssets < m.amount).sort((a, b) => a.amount - b.amount)[0]
   const lastAchieved = mstones.filter(m => totalAssets >= m.amount).sort((a, b) => b.amount - a.amount)[0]
 
+  // Coast FI summary (1.7)
+  const retirementAge = profile.retirementAge ?? 50
+  const currentAge = profile.birthYear ? new Date().getFullYear() - profile.birthYear : null
+  const yearsToRetirement = currentAge ? Math.max(0, retirementAge - currentAge) : 20
+  const coastFI = calculateCoastFI(regularFI, retirementCorpus, projectionParams.expectedReturn, projectionParams.expenseInflation, yearsToRetirement)
+
+  // Portfolio P&L (1.10)
+  const totalInvested = inv.reduce((s, i) => s + i.investedValue, 0)
+  const totalCurrent = inv.reduce((s, i) => s + i.currentValue, 0)
+  const portfolioPL = totalCurrent - totalInvested
+  const portfolioPLPercent = totalInvested > 0 ? portfolioPL / totalInvested : 0
+
+  // Income trend sparkline data (1.12) — last 5 years
+  const incomeTrendData = incomes.slice(-5).map(i => ({
+    year: i.year,
+    income: i.netIncome,
+  }))
+
   return (
     <div className="space-y-6">
       <div>
@@ -153,7 +195,12 @@ export default function DashboardPage() {
               <div className="rounded-full bg-neutral-100 dark:bg-neutral-800 p-2"><TrendingUp className="h-4 w-4 text-neutral-600 dark:text-neutral-400" /></div>
             </div>
             <p className="text-2xl font-bold">{formatCurrency(netWorth, true)}</p>
-            <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">Assets - Liabilities</p>
+            {totalInvested > 0 && (
+              <p className={`text-xs mt-1 ${portfolioPL >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                P&L: {portfolioPL >= 0 ? '+' : ''}{formatCurrency(portfolioPL, true)} ({portfolioPL >= 0 ? '+' : ''}{formatPercent(portfolioPLPercent)})
+              </p>
+            )}
+            {totalInvested === 0 && <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">Assets - Liabilities</p>}
           </CardContent>
         </Card>
         <Card>
@@ -173,17 +220,24 @@ export default function DashboardPage() {
               <div className="rounded-full bg-neutral-100 dark:bg-neutral-800 p-2"><Shield className="h-4 w-4 text-neutral-600 dark:text-neutral-400" /></div>
             </div>
             <p className="text-2xl font-bold">{formatCurrency(emergencyFund, true)}</p>
-            <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">{(emergencyFund / monthlyExpenses).toFixed(1)} months covered</p>
+            <div className="flex items-center gap-2 mt-1">
+              <p className="text-xs text-neutral-400 dark:text-neutral-500">{monthlyExpenses > 0 ? (emergencyFund / monthlyExpenses).toFixed(1) : '0'} months covered</p>
+              <Badge variant={monthlyExpenses > 0 && emergencyFund / monthlyExpenses >= 6 ? 'success' : monthlyExpenses > 0 && emergencyFund / monthlyExpenses >= 3 ? 'warning' : 'danger'}>
+                {monthlyExpenses > 0 && emergencyFund / monthlyExpenses >= 6 ? 'Healthy' : monthlyExpenses > 0 && emergencyFund / monthlyExpenses >= 3 ? 'Adequate' : 'Low'}
+              </Badge>
+            </div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-5">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm text-neutral-500 dark:text-neutral-400">Years Saved</span>
-              <div className="rounded-full bg-neutral-100 dark:bg-neutral-800 p-2"><PiggyBank className="h-4 w-4 text-neutral-600 dark:text-neutral-400" /></div>
+              <span className="text-sm text-neutral-500 dark:text-neutral-400">Years to FI</span>
+              <div className="rounded-full bg-neutral-100 dark:bg-neutral-800 p-2"><Target className="h-4 w-4 text-neutral-600 dark:text-neutral-400" /></div>
             </div>
-            <p className="text-2xl font-bold">{savedYears.toFixed(1)}</p>
-            <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">Of expenses covered</p>
+            <p className="text-2xl font-bold">
+              {!isFinite(yearsToFI) || isNaN(yearsToFI) ? '∞' : yearsToFI <= 0 ? 'Achieved!' : yearsToFI.toFixed(1)}
+            </p>
+            <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">{savedYears.toFixed(1)} years of expenses saved</p>
           </CardContent>
         </Card>
       </div>
@@ -196,21 +250,21 @@ export default function DashboardPage() {
         <CardContent className="space-y-4">
           <div>
             <div className="flex justify-between text-sm mb-1.5">
-              <span>Lean FI <span className="text-neutral-400 dark:text-neutral-500">({formatCurrency(leanFI, true)})</span></span>
+              <span>Lean FI ({fiMultiplier * 0.5}x) <span className="text-neutral-400 dark:text-neutral-500">({formatCurrency(leanFI, true)})</span></span>
               <span className="font-medium">{formatPercent(fiProgress)}</span>
             </div>
             <Progress value={fiProgress * 100} indicatorClassName="bg-emerald-500" />
           </div>
           <div>
             <div className="flex justify-between text-sm mb-1.5">
-              <span>Regular FI <span className="text-neutral-400 dark:text-neutral-500">({formatCurrency(regularFI, true)})</span></span>
+              <span>Regular FI ({fiMultiplier}x) <span className="text-neutral-400 dark:text-neutral-500">({formatCurrency(regularFI, true)})</span></span>
               <span className="font-medium">{formatPercent(calculateFIProgress(retirementCorpus, regularFI))}</span>
             </div>
             <Progress value={calculateFIProgress(retirementCorpus, regularFI) * 100} indicatorClassName="bg-blue-500" />
           </div>
           <div>
             <div className="flex justify-between text-sm mb-1.5">
-              <span>Fat FI <span className="text-neutral-400 dark:text-neutral-500">({formatCurrency(fatFI, true)})</span></span>
+              <span>Fat FI ({fiMultiplier * 2}x) <span className="text-neutral-400 dark:text-neutral-500">({formatCurrency(fatFI, true)})</span></span>
               <span className="font-medium">{formatPercent(calculateFIProgress(retirementCorpus, fatFI))}</span>
             </div>
             <Progress value={calculateFIProgress(retirementCorpus, fatFI) * 100} indicatorClassName="bg-purple-500" />
@@ -233,6 +287,7 @@ export default function DashboardPage() {
                   <YAxis tickFormatter={(v) => formatCurrency(v, true)} tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v) => formatCurrency(Number(v))} />
                   <Area type="monotone" dataKey="assets" stackId="1" fill={colors.assetsFill} stroke={colors.assets} name="Assets" />
+                  <Area type="monotone" dataKey="liabilities" fill={colors.liabilitiesFill} stroke={colors.liabilities} fillOpacity={0.4} name="Liabilities" />
                   <Area type="monotone" dataKey="netWorth" fill={colors.netWorthFill} stroke={colors.netWorth} fillOpacity={0.1} name="Net Worth" />
                 </AreaChart>
               </ResponsiveContainer>
@@ -253,7 +308,7 @@ export default function DashboardPage() {
                 <ResponsiveContainer width="50%" height={200}>
                   <PieChart>
                     <Pie data={allocationData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value">
-                      {allocationData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                      {allocationData.map((d, i) => <Cell key={i} fill={ALLOCATION_COLORS[d.name] || COLORS[i % COLORS.length]} />)}
                     </Pie>
                     <Tooltip formatter={(v) => formatCurrency(Number(v))} />
                   </PieChart>
@@ -261,7 +316,7 @@ export default function DashboardPage() {
                 <div className="space-y-2">
                   {allocationData.map((d, i) => (
                     <div key={d.name} className="flex items-center gap-2">
-                      <div className="h-3 w-3 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
+                      <div className="h-3 w-3 rounded-full" style={{ background: ALLOCATION_COLORS[d.name] || COLORS[i % COLORS.length] }} />
                       <span className="text-sm">{d.name}</span>
                       <span className="text-sm font-medium ml-auto">{formatCurrency(d.value, true)}</span>
                     </div>
@@ -294,7 +349,7 @@ export default function DashboardPage() {
               return (
                 <div key={r.label} className="space-y-1">
                   <p className="text-xs text-neutral-500 dark:text-neutral-400">{r.label}</p>
-                  <p className={`text-lg font-semibold ${r.lowerBetter ? (r.current <= (r.desired || 0.3) ? 'text-emerald-600' : 'text-red-600') : ''}`}>
+                  <p className={`text-lg font-semibold ${isGood ? 'text-emerald-600' : 'text-red-600'}`}>
                     {formatPercent(r.current)}
                   </p>
                   <p className="text-xs text-neutral-400 dark:text-neutral-500">
@@ -308,8 +363,35 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
 
+      {/* Coast FI Summary (1.7) */}
+      <Card>
+        <CardContent className="p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Compass className="h-4 w-4 text-blue-500" />
+              <span className="text-sm font-medium">Coast FI Progress</span>
+            </div>
+            <Badge variant={coastFI.coastFIReached ? 'success' : 'warning'}>
+              {coastFI.coastFIReached ? 'Reached!' : 'In Progress'}
+            </Badge>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex-1">
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-neutral-600 dark:text-neutral-300">{formatCurrency(retirementCorpus, true)} current</span>
+                <span className="font-medium">{formatCurrency(coastFI.coastFITarget, true)} target</span>
+              </div>
+              <Progress value={coastFI.coastFIProgress * 100} className="h-2" indicatorClassName="bg-blue-500" />
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+                {(coastFI.coastFIProgress * 100).toFixed(1)}% · Retire by {retirementAge}{currentAge ? ` (${yearsToRetirement}y away)` : ''}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Alerts & Highlights */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Rebalancing Alert */}
         <Card className={rebalanceNeeded ? 'border-amber-200 dark:border-amber-800 bg-amber-50/30 dark:bg-amber-950/30' : ''}>
           <CardContent className="p-5">
@@ -319,6 +401,7 @@ export default function DashboardPage() {
             </div>
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
               Equity: {formatPercent(actualEquityRatio)} (target {formatPercent(desiredEquity)})
+              {' · '}Debt: {formatPercent(1 - actualEquityRatio)} (target {formatPercent(profile.desiredDebtRatio || (1 - desiredEquity))})
             </p>
             {rebalanceNeeded && (
               <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
@@ -368,6 +451,26 @@ export default function DashboardPage() {
             <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">
               {activeSips.length} active SIP{activeSips.length !== 1 ? 's' : ''} · {formatCurrency(totalMonthlySIP * 12, true)}/year
             </p>
+          </CardContent>
+        </Card>
+
+        {/* Income Trend Sparkline (1.12) */}
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center gap-2 mb-2">
+              <BarChart3 className="h-4 w-4 text-neutral-600 dark:text-neutral-400" />
+              <span className="text-sm font-medium">Income Trend</span>
+            </div>
+            {incomeTrendData.length > 1 ? (
+              <ResponsiveContainer width="100%" height={60}>
+                <BarChart data={incomeTrendData}>
+                  <Tooltip formatter={(v) => formatCurrency(Number(v), true)} />
+                  <Bar dataKey="income" fill={colors.bar1} radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-xs text-neutral-400 dark:text-neutral-500">Add income data to see trends</p>
+            )}
           </CardContent>
         </Card>
       </div>

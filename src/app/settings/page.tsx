@@ -37,6 +37,8 @@ const defaultProfile: Omit<UserProfile, 'id'> = {
   desiredRealToNW: 0.4,
   desiredSavingsToIncome: 0.65,
   desiredLoanToAsset: 0.2,
+  fiMultiplier: 25,
+  retirementAge: 50,
 }
 
 export default function SettingsPage() {
@@ -78,6 +80,8 @@ export default function SettingsPage() {
         desiredRealToNW: profile.desiredRealToNW,
         desiredSavingsToIncome: profile.desiredSavingsToIncome,
         desiredLoanToAsset: profile.desiredLoanToAsset,
+        fiMultiplier: profile.fiMultiplier ?? 25,
+        retirementAge: profile.retirementAge ?? 50,
       })
     }
   }, [profile])
@@ -252,6 +256,21 @@ export default function SettingsPage() {
         <p className="text-neutral-500 dark:text-neutral-400 text-sm mt-1">Configure your profile and manage data</p>
       </div>
 
+      {/* Privacy Info */}
+      <Card>
+        <CardContent className="p-5">
+          <div className="flex items-start gap-3">
+            <div className="rounded-full bg-emerald-50 dark:bg-emerald-950 p-2 mt-0.5">
+              <svg className="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+            </div>
+            <div>
+              <p className="text-sm font-medium">Your data stays private</p>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">All data is stored locally in your browser using IndexedDB. Nothing is sent to any server. Export regularly to keep backups.</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Profile */}
       <Card>
         <CardHeader>
@@ -324,6 +343,44 @@ export default function SettingsPage() {
             >
               <Plus className="h-4 w-4 mr-1" /> Add
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* FI Targets */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">FI Targets</CardTitle>
+          <CardDescription>How "enough" is computed across the app (Dashboard, Projections, Coast FI)</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>FI Multiplier (× annual expenses)</Label>
+              <Input
+                type="number"
+                step="1"
+                min="10"
+                max="50"
+                value={form.fiMultiplier ?? 25}
+                onChange={e => setForm({ ...form, fiMultiplier: Number(e.target.value) })}
+              />
+              <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">
+                {form.fiMultiplier ?? 25}x ≈ {(100 / (form.fiMultiplier || 25)).toFixed(2)}% SWR · Lean = {((form.fiMultiplier || 25) * 0.5)}x · Fat = {((form.fiMultiplier || 25) * 2)}x
+              </p>
+            </div>
+            <div>
+              <Label>Target Retirement Age</Label>
+              <Input
+                type="number"
+                step="1"
+                min="30"
+                max="80"
+                value={form.retirementAge ?? 50}
+                onChange={e => setForm({ ...form, retirementAge: Number(e.target.value) })}
+              />
+              <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">Used for Coast FI calculation</p>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -519,21 +576,6 @@ export default function SettingsPage() {
             <p className="text-xs text-neutral-400 dark:text-neutral-500 mt-2 flex items-center gap-1">
               <AlertTriangle className="h-3 w-3" /> This will permanently delete all your data from this browser
             </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Privacy Info */}
-      <Card>
-        <CardContent className="p-5">
-          <div className="flex items-start gap-3">
-            <div className="rounded-full bg-emerald-50 dark:bg-emerald-950 p-2 mt-0.5">
-              <svg className="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
-            </div>
-            <div>
-              <p className="text-sm font-medium">Your data stays private</p>
-              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">All data is stored locally in your browser using IndexedDB. Nothing is sent to any server. Export regularly to keep backups.</p>
-            </div>
           </div>
         </CardContent>
       </Card>

@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useLiveQuery } from '@/hooks/useLiveQuery'
 import { useMasked } from '@/hooks/useMasked'
 import { db, seedDefaultGoals } from '@/lib/db'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatPercent } from '@/lib/utils'
 import type { Investment } from '@/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -249,10 +249,22 @@ export default function NetWorthPage() {
 
   function classBadgeVariant(cls: string): 'default' | 'success' | 'warning' | 'danger' {
     if (cls === 'equity') return 'success'
-    if (cls === 'debt') return 'default'
+    if (cls === 'debt' || cls === 'ppf') return 'default'
     if (cls === 'real_estate') return 'danger'
+    if (cls === 'epf' || cls === 'nps') return 'warning'
     return 'warning'
   }
+
+  // Per-asset-class summary (2.5)
+  const classSummary = useMemo(() => {
+    const classes = ['equity', 'debt', 'fixed', 'real_estate', 'epf', 'ppf', 'nps'] as const
+    return classes.map(cls => {
+      const items = inv.filter(i => i.assetClass === cls)
+      const invested = items.reduce((s, i) => s + i.investedValue, 0)
+      const current = items.reduce((s, i) => s + i.currentValue, 0)
+      return { class: cls, count: items.length, invested, current, pl: current - invested }
+    }).filter(c => c.count > 0)
+  }, [inv])
 
   const isFiltered = filterGoal !== 'all' || filterClass !== 'all'
 
@@ -327,6 +339,9 @@ export default function NetWorthPage() {
                 <option value="debt">Debt</option>
                 <option value="fixed">Fixed Income</option>
                 <option value="real_estate">Real Estate</option>
+                <option value="epf">EPF</option>
+                <option value="ppf">PPF</option>
+                <option value="nps">NPS</option>
               </Select>
             </div>
             {isFiltered && (
@@ -343,6 +358,30 @@ export default function NetWorthPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Per-Asset-Class Summary (2.5) */}
+      {classSummary.length > 1 && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {classSummary.map(c => (
+            <Card key={c.class}>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge variant={classBadgeVariant(c.class)} className="text-[10px]">{c.class}</Badge>
+                  <span className="text-xs text-neutral-400 dark:text-neutral-500">{c.count} holdings</span>
+                </div>
+                <p className="text-sm font-semibold">{fmt(c.current, true)}</p>
+                <div className="flex items-center gap-2 text-xs mt-0.5">
+                  <span className="text-neutral-400 dark:text-neutral-500">Inv: {fmt(c.invested, true)}</span>
+                  <span className={c.pl >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                    {c.pl >= 0 ? '+' : ''}{fmt(c.pl, true)}
+                    {c.invested > 0 && ` (${c.pl >= 0 ? '+' : ''}${formatPercent(c.pl / c.invested)})`}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {/* Investment Table */}
       <Card>
@@ -387,6 +426,7 @@ export default function NetWorthPage() {
                         Weight <SortIcon col="weight" />
                       </button>
                     </th>
+                    <th className="text-right py-3 px-2 font-medium text-neutral-500 dark:text-neutral-400">Ann. Return</th>
                     <th className="py-3 px-2"></th>
                   </tr>
                 </thead>
@@ -394,6 +434,13 @@ export default function NetWorthPage() {
                   {filteredSorted.map(item => {
                     const pl = item.currentValue - item.investedValue
                     const weight = totalCurrent > 0 ? item.currentValue / totalCurrent : 0
+                    // Holding-period annualized return (2.4)
+                    const yearsHeld = item.startDate
+                      ? (Date.now() - new Date(item.startDate).getTime()) / (365.25 * 24 * 60 * 60 * 1000)
+                      : 0
+                    const annReturn = item.investedValue > 0 && yearsHeld >= 0.5 && item.currentValue > 0
+                      ? Math.pow(item.currentValue / item.investedValue, 1 / yearsHeld) - 1
+                      : null
                     return (
                       <tr key={item.id} className="border-b border-neutral-50 dark:border-neutral-800 hover:bg-neutral-50/50 dark:hover:bg-neutral-800/50">
                         <td className="py-2.5 px-4">
@@ -412,6 +459,9 @@ export default function NetWorthPage() {
                           {pl >= 0 ? '+' : ''}{fmt(pl)}
                         </td>
                         <td className="py-2.5 px-2 text-right text-neutral-500 dark:text-neutral-400">{(weight * 100).toFixed(1)}%</td>
+                        <td className={`py-2.5 px-2 text-right ${annReturn !== null ? (annReturn >= 0 ? 'text-emerald-600' : 'text-red-600') : 'text-neutral-400 dark:text-neutral-500'}`}>
+                          {annReturn !== null ? formatPercent(annReturn) : '—'}
+                        </td>
                         <td className="py-2.5 px-2 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button onClick={() => openEdit(item)} className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800">
@@ -439,6 +489,7 @@ export default function NetWorthPage() {
                     <td className="py-3 px-2 text-right">
                       {totalCurrent > 0 ? ((filteredCurrent / totalCurrent) * 100).toFixed(1) : '0.0'}%
                     </td>
+                    <td className="py-3 px-2 text-right"></td>
                     <td></td>
                   </tr>
                 </tfoot>
@@ -467,6 +518,9 @@ export default function NetWorthPage() {
                 <option value="debt">Debt</option>
                 <option value="fixed">Fixed Income</option>
                 <option value="real_estate">Real Estate</option>
+                <option value="epf">EPF</option>
+                <option value="ppf">PPF</option>
+                <option value="nps">NPS</option>
               </Select>
             </div>
           </div>

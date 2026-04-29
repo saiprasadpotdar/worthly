@@ -9,7 +9,7 @@ export interface Goal {
 export interface Investment {
   id?: number
   goal: string
-  assetClass: 'equity' | 'debt' | 'fixed' | 'real_estate'
+  assetClass: 'equity' | 'debt' | 'fixed' | 'real_estate' | 'epf' | 'ppf' | 'nps'
   instrument: string
   investedValue: number
   currentValue: number
@@ -81,6 +81,8 @@ export interface UserProfile {
   desiredRealToNW: number
   desiredSavingsToIncome: number
   desiredLoanToAsset: number
+  fiMultiplier?: number // Regular FI = annualExpenses × fiMultiplier (default 25 = 4% SWR)
+  retirementAge?: number // Target retirement age for Coast FI (default 50)
   passkey?: string // SHA-256 hash of user's passkey
 }
 
@@ -111,7 +113,7 @@ export interface SIP {
   instrument: string
   amount: number
   dayOfMonth: number // 1-28
-  assetClass: 'equity' | 'debt' | 'fixed' | 'real_estate'
+  assetClass: 'equity' | 'debt' | 'fixed' | 'real_estate' | 'epf' | 'ppf' | 'nps'
   platform?: string
   startDate: string
   active: boolean

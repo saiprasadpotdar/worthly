@@ -86,6 +86,10 @@ export function runProjection(params: ProjectionParams, birthYear?: number): Pro
       fiAge = age ?? null
     }
 
+    // Don't grow beyond the projection window — the last entry is the
+    // final snapshot, not the start of another year.
+    if (y === yearsToProject) break
+
     // Simulate 12 months of SIP + returns
     for (let m = 0; m < 12; m++) {
       portfolio = portfolio * (1 + monthlyReturn) + currentSIP

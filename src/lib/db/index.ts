@@ -139,12 +139,13 @@ export async function captureSnapshot() {
   const properties = await db.properties.toArray()
 
   const equity = investments.filter(i => i.assetClass === 'equity').reduce((s, i) => s + i.currentValue, 0)
-  const debt = investments.filter(i => i.assetClass === 'debt' || i.assetClass === 'fixed').reduce((s, i) => s + i.currentValue, 0)
+  const debt = investments.filter(i => i.assetClass === 'debt' || i.assetClass === 'fixed' || i.assetClass === 'epf' || i.assetClass === 'ppf' || i.assetClass === 'nps').reduce((s, i) => s + i.currentValue, 0)
   const liquidAssets = investments.filter(i => i.assetClass !== 'real_estate').reduce((s, i) => s + i.currentValue, 0)
   const invRealEstate = investments.filter(i => i.assetClass === 'real_estate').reduce((s, i) => s + i.currentValue, 0)
   const realAssets = properties.reduce((s, p) => s + p.currentMarketValue, 0) + invRealEstate
   const totalAssets = liquidAssets + realAssets
-  const totalLiabilities = loans.reduce((s, l) => s + l.balance, 0)
+  const propertyMortgages = properties.reduce((s, p) => s + (p.outstandingPrincipal || 0), 0)
+  const totalLiabilities = loans.reduce((s, l) => s + l.balance, 0) + propertyMortgages
   const netWorth = totalAssets - totalLiabilities
 
   const snap: Omit<NetWorthSnapshot, 'id'> = {
@@ -163,5 +164,22 @@ export async function captureSnapshot() {
     await db.netWorthSnapshots.update(existing.id, snap)
   } else {
     await db.netWorthSnapshots.add(snap)
+  }
+
+  // Check and write milestone achievements
+  const milestones = await db.milestones.toArray()
+  const allSnapshots = await db.netWorthSnapshots.orderBy('date').toArray()
+  const firstSnap = allSnapshots[0]
+
+  for (const m of milestones) {
+    if (totalAssets >= m.amount && !m.achievedDate && m.id) {
+      const monthsTaken = firstSnap
+        ? Math.round(((year - firstSnap.year) * 12 + (month - firstSnap.month)))
+        : 0
+      await db.milestones.update(m.id, {
+        achievedDate: `${year}-${String(month).padStart(2, '0')}-01`,
+        monthsTaken: Math.max(0, monthsTaken),
+      })
+    }
   }
 }
